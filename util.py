@@ -19,15 +19,18 @@ def encode_ip(ip):
 
 
 def decode_ip(code):
-    alphabet = string.ascii_lowercase
-    ip = ""
-    
-    for charl in code.split("-"):
-        for char in charl:
-            ip += str(alphabet.index(char))
-        ip += "."
+    try:
+        alphabet = string.ascii_lowercase
+        ip = ""
+        
+        for charl in code.split("-"):
+            for char in charl:
+                ip += str(alphabet.index(char))
+            ip += "."
 
-    return ip[:-1]
+        return ip[:-1]
+    except:
+        return ""
 
 
 class StopThread(threading.Thread):

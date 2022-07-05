@@ -4,6 +4,7 @@ import sys
 import socket
 import random
 import keyboard
+import argparse
 
 from server import Server
 from client import Client
@@ -31,6 +32,9 @@ class Skyjo:
 
         self.cards_index = 0
         self.cards_data = []
+
+    def init_game(self):
+        self.cards_data = []
         for i in range(0, 15):
             if i < 5:
                 self.cards_data.append(-2)
@@ -40,7 +44,6 @@ class Skyjo:
                 self.cards_data.append(0)
         random.shuffle(self.cards_data)
 
-    def init_game(self):
         self.pass_cards.append(self.get_card())
         self.active = True
 
@@ -50,8 +53,19 @@ class Skyjo:
         for player in self.players:
             for i in range(0, 12):
                 player.append([self.get_card(), False])
+
             player[0][1] = True
             player[1][1] = True
+
+            player[2][1] = True  # remove
+            player[3][1] = True
+            player[4][1] = True
+            player[5][1] = True
+            player[6][1] = True
+            player[7][1] = True
+            player[8][1] = True
+            player[9][1] = True
+            player[10][1] = True
 
             value = player[0][0] + player[1][0]
             if value > max_val:
@@ -154,11 +168,13 @@ class Skyjo:
         self.server = server
 
     def attach_client(self, client: Client):
-        global wait_play, state, action, info
+        global wait_play, state, action, info, win_info
         wait_play = True
         action = None
         state = "wait_game"
         info = None
+        win_info = None
+        is_last = False
 
         self.client = client
         self.players.append([])
@@ -169,8 +185,6 @@ class Skyjo:
             action = data
 
         def on_cards(data):
-            global state
-            state = "wait_player"
             self.players[0] = data["cards"]
 
         def on_quit(data):
@@ -185,9 +199,9 @@ class Skyjo:
             state = "wait_player"
 
         def on_win(data):
-            global state, info
+            global state, win_info
             state = "win"
-            info = data
+            win_info = data
 
         self.client.on('player_play', on_play)
         self.client.on('player_update', on_update)
@@ -203,9 +217,9 @@ class Skyjo:
                 state = None
             elif state == "wait_player":
                 if info:
-                    print("Waiting for Player #{0} to play\n ----------- Discard card [{1}]".format(
-                        info['id'], info['discard'][-1]))
-                    if info["last"] == 1:
+                    print("Waiting for Player #{0} to play\n ----------- Discard card [{1}]".format(info['id'], info['discard'][-1]))
+                    if info["last"] != -1 and not is_last:
+                        is_last = True
                         print("Last turn, a player has revealed all his cards !")
                 else:
                     print("Waiting for Player #(?) to play")
@@ -224,17 +238,24 @@ class Skyjo:
                                  "discard": action["discard"],
                                  "cards": self.players[0]
                                  })
-            elif state == "win":
+            elif state == "win" or win_info != None:
                 state = None
-                if info:
-                    print("Player #{0} is the Winner !".format(info['win_id']))
+                if win_info:
+                    print("Player #{0} is the Winner !".format(
+                        win_info['win_id']))
+
                     for card in self.players[0]:
                         card[1] = True
+
                     print("\nYour cards:\n")
                     self.show_player_cards(0)
+
                     print("\nWinner cards:")
-                    self.players.append(info['win_cards'])
+                    self.players.append(win_info['win_cards'])
                     self.show_player_cards(1)
+
+                    print("Winner Score: {0}\nYour Score: {1}".format(
+                        self.get_sum(self.players[1]), self.get_sum(self.players[0])))
                     break
         self.client.close()
 
@@ -252,18 +273,20 @@ class Skyjo:
                     client, addr = self.server.clients[i]
                     cards = self.players[i]
 
-                    status = self.server.send(
-                        "player_cards", {"cards": cards}, client)
+                    status = self.server.send("player_cards",
+                                              {
+                                                  "cards": cards
+                                              }, client)
 
                     print("Sending game data to {0}:{1}".format(
                         addr[0], addr[1]))
                     if not status:
                         print("[!] Connection error {0} !".format(
                             self.server.last_error))
-                        break
+                        return
                 except:
                     print("[!] Connection error a player is not connected !")
-                    break
+                    return
             print("")
 
             def on_play(content, client, addr):
@@ -281,7 +304,12 @@ class Skyjo:
                 for i in range(0, len(self.server.clients)):
                     if i != self.turn:
                         client, addr = self.server.clients[i]
-                        if not self.server.send('player_update', {"discard": self.pass_cards, "id": self.turn, "last": self.last_turn}, client):
+
+                        if not self.server.send('player_update', {
+                            "discard": self.pass_cards,
+                            "id": self.turn,
+                            "last": self.last_turn
+                        }, client):
                             print("[!] Connection error {0} !".format(
                                 self.server.last_error))
                             self.active = False
@@ -293,27 +321,28 @@ class Skyjo:
                 if self.turn == len(self.players)-1:
                     state = self.action_player(
                         self.turn, self.pass_cards, self.get_card())
-                    if state == Skyjo.WIN:
-                        print("Player #{0} Win !".format(self.turn))
+                    if state == Skyjo.EXIT:
+                        print("Player #{0} quit.".format(self.turn))
                         break
-                    elif state == Skyjo.EXIT:
-                        total_exit = True
-                        print("Player #{0} quit...".format(self.turn))
 
-                        break
-                    if self.check_reveal(self.turn):
+                    if self.check_reveal(self.turn) and self.last_turn == -1:
                         self.last_turn = 0
                         print("Last turn you have reveal all your cards !")
                 else:
                     client, _ = self.server.clients[self.turn]
                     turn_end = False
+
                     self.server.send("player_play", {
-                                     "id": self.turn, "next": self.get_card(), "discard": self.pass_cards}, client)
+                        "id": self.turn,
+                        "next": self.get_card(),
+                        "discard": self.pass_cards
+                    }, client)
+
                     while not turn_end:
                         print("\rWaiting for Player #{0} to play...".format(
                             self.turn), end='')
 
-                    if self.check_reveal(self.turn):
+                    if self.check_reveal(self.turn) and self.last_turn == -1:
                         self.last_turn = 0
                         print("Last turn you have reveal all your cards !")
 
@@ -327,18 +356,28 @@ class Skyjo:
                 if self.last_turn >= len(self.players):
                     self.active = False
                     win_id = self.get_winner()
+
                     print("\nPlayer #{0} is the Winner !\n".format(win_id))
+                    print("\nWinner cards:")
                     self.show_player_cards(win_id)
+                    print("Winner Score: {0}\nYour Score: {1}".format(
+                        self.get_sum(self.players[win_id]), self.get_sum(self.players[-1])))
 
                     for i in range(0, len(self.server.clients)):
                         client, addr = self.server.clients[i]
                         if not self.server.send('player_win', {"win_cards": self.players[win_id], "win_id": win_id}, client):
-                            print("[!] Connection error {0} !".format(
-                                self.server.last_error))
+                            print("[!] Connection error {0} !".format(self.server.last_error))
                     break
 
+    def get_sum(self, cards):
+        val = 0
+        for card in cards:
+            if card[0] != Skyjo.NULL_CARD:
+                val += card[0]
+        return val
+
     def get_winner(self):
-        max_val = 0
+        min_val = 12 * 12
         best = 0
         index = 0
 
@@ -347,7 +386,7 @@ class Skyjo:
             for card in player:
                 if card[0] != Skyjo.NULL_CARD:
                     sum += card[0]
-            if sum > max_val:
+            if sum < min_val:
                 best = index
             index += 1
 
@@ -450,6 +489,141 @@ class Skyjo:
         print('')
 
 
+class MenuSkyjo:
+
+    STATE_NONE = -1
+
+    STATE_GAME_START = 1
+    STATE_GAME_WAIT = 2
+
+    STATE_CONNEXION_OK = 3
+    STATE_CONNEXION_FAILED = 4
+    STATE_CONNEXION_WAIT = 5
+
+    def __init__(self):
+        self.skyjo = Skyjo()
+        self.state = MenuSkyjo.STATE_NONE
+        self.max_players = 6
+
+    def start(self):
+        ap = argparse.ArgumentParser()
+
+        ap.add_argument("-c", "--client", required=False,
+                        help="connect to a server using a skyjo code", default=None, type=str)
+        ap.add_argument("-m", "--max_players", required=False,
+                        help="set max client in a skyjo game (default: 6)", default=6, type=int)
+        args = ap.parse_args()
+
+        os.system("title Skyjo")
+        print("""
+    █▀▀ █░█ █░░█ ░░▀ █▀▀█ 
+    ▀▀█ █▀▄ █▄▄█ ░░█ █░░█ 
+    ▀▀▀ ▀░▀ ▄▄▄█ █▄█ ▀▀▀▀ 
+    
+    
+JulesG10 - MIT License 2022 (c)
+    """)
+
+        self.max_players = args.max_players
+
+        if args.client != None:
+            self.client_mode(args.client)
+
+        return self.menu_mode()
+
+    def menu_mode(self):
+        self.state = MenuSkyjo.STATE_NONE
+        self.skyjo = Skyjo()
+
+        options = ['Create New Game', 'Join Game', 'Exit']
+        index = select(
+            "Select an option using the up and down keys\n", options, "-> {0}")
+
+        if index == 0:
+            self.server_mode()
+        elif index == 1:
+            code = str(input("Skyjo Code:"))
+            self.client_mode(code)
+        else:
+            return 0
+
+        self.menu_mode()
+
+    def server_mode(self):
+        self.state = MenuSkyjo.STATE_GAME_WAIT
+
+        ip = socket.gethostbyname(socket.gethostname())
+        code = util.encode_ip(ip).upper()
+
+        print("Skyjo Code: {0}".format(code))
+        print("(Press [Escape] to start)\n")
+
+        server = Server()
+        server.start()
+
+        self.skyjo.attach_server(server)
+
+        def new_player(content, client, addr):
+            if self.state == MenuSkyjo.STATE_GAME_WAIT and len(server.clients)+1 <= self.max_players:
+                if len(server.clients)+1 == self.max_players:
+                    start_game()
+                self.skyjo.add_player()
+            else:
+                server.send("player_quit", {
+                            "message": "The game has already started, try again later !"}, client)
+
+        def start_game():
+            self.state = MenuSkyjo.STATE_GAME_START
+
+        def update():
+            print("\rThere is {0}/{1} players connected ! {2}".format(
+                len(server.clients)+1, self.max_players, server.last_error), end='')
+
+        server.on("player_new", new_player)
+        keyboard.add_hotkey('escape', start_game)
+
+        while self.state == MenuSkyjo.STATE_GAME_WAIT:
+            update()
+
+        keyboard.clear_all_hotkeys()
+
+        print("\nStarting Game ...")
+        self.skyjo.add_player()
+
+        self.skyjo.init_game()
+        self.skyjo.loop_play()
+
+    def client_mode(self, code):
+        self.state = MenuSkyjo.STATE_CONNEXION_WAIT
+        ip = util.decode_ip(code.lower())
+
+        skyjo = Skyjo()
+        client = Client(ip)
+
+        def connected():
+            print("\nConnection success !")
+            self.state = MenuSkyjo.STATE_CONNEXION_OK
+
+        def error():
+            print("\nConnection failed")
+            print(client.last_error)
+            print("")
+
+            self.state = MenuSkyjo.STATE_CONNEXION_FAILED
+
+        client.set_connect_callback(connected)
+        client.set_error_callback(error)
+
+        client.start()
+        while self.state == MenuSkyjo.STATE_CONNEXION_WAIT:
+            pass
+
+        if self.state == MenuSkyjo.STATE_CONNEXION_FAILED:
+            client.close()
+        else:
+            skyjo.attach_client(client)
+
+
 def select(title, options, select_style="[{0}]"):
     global index
     index = 0
@@ -495,97 +669,7 @@ def select(title, options, select_style="[{0}]"):
 
 
 def main():
-    os.system("title Skyjo")
-    logo = """
-    █▀▀ █░█ █░░█ ░░▀ █▀▀█ 
-    ▀▀█ █▀▄ █▄▄█ ░░█ █░░█ 
-    ▀▀▀ ▀░▀ ▄▄▄█ █▄█ ▀▀▀▀ 
-    
-    
-JulesG10 - MIT License 2022 (c)
-    """
-    print(logo)
-
-    options = ['Create New Game', 'Join Game', 'Exit']
-    index = select(
-        "Select an option using the up and down keys\n", options, "-> {0}")
-
-    if index == 0:
-        global started
-        started = False
-
-        ip = socket.gethostbyname(socket.gethostname())
-        code = util.encode_ip(ip).upper()
-
-        print("Skyjo Code: {0}".format(code))
-        print("(Press [Escape] to start)\n")
-
-        skyjo = Skyjo()
-        server = Server()
-
-        server.start()
-        skyjo.attach_server(server)
-
-        def new_player(content, client, addr):
-            global started
-            if not started and len(server.clients)+1 <= 6:
-                if len(server.clients)+1 == 6:
-                    started = True
-                skyjo.add_player()
-            else:
-                server.send("player_quit", {
-                            "message": "The game has already started, try again later !"}, client)
-
-        def start_game():
-            global started
-            started = True
-
-        def update():
-            print("\rThere is {0}/6 players connected... {1}".format(
-                len(server.clients)+1, server.last_error), end='')
-
-        server.on("player_new", new_player)
-        keyboard.add_hotkey('escape', start_game)
-
-        while not started:
-            update()
-
-        keyboard.clear_all_hotkeys()
-
-        print("\nStarting Game ...")
-        skyjo.add_player()
-
-        skyjo.init_game()
-        skyjo.loop_play()
-
-    elif index == 1:
-        global is_connect
-        is_connect = False
-        code = str(input("Skyjo Code:")).lower()
-        ip = util.decode_ip(code)
-
-        skyjo = Skyjo()
-        client = Client(ip)
-
-        def connected():
-            global is_connect
-            is_connect = True
-            print("Connection success !")
-
-        def error():
-            print("Connection failed")
-            print(client.last_error)
-            sys.exit(1)
-
-        client.set_connect_callback(connected)
-        client.set_error_callback(error)
-
-        client.start()
-        while not is_connect:
-            pass
-        skyjo.attach_client(client)
-
-    return 0
+    return MenuSkyjo().start()
 
 
 if __name__ == "__main__":
