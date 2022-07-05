@@ -57,16 +57,6 @@ class Skyjo:
             player[0][1] = True
             player[1][1] = True
 
-            player[2][1] = True  # remove
-            player[3][1] = True
-            player[4][1] = True
-            player[5][1] = True
-            player[6][1] = True
-            player[7][1] = True
-            player[8][1] = True
-            player[9][1] = True
-            player[10][1] = True
-
             value = player[0][0] + player[1][0]
             if value > max_val:
                 max_val = value
